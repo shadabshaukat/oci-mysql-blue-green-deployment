@@ -14,6 +14,11 @@ It creates:
   - **Blue (production)**: MySQL version **8.0.45**
   - Shape **MySQL.2**
   - Storage **50 GB**
+  - Shared OCI MySQL configuration attached to both Blue/Green DB systems for logical replication readiness
+    - `binlog_expire_logs_seconds = 604800`
+    - `binlog_row_metadata = FULL`
+    - `binlog_transaction_compression = false`
+    - `replica_parallel_workers = 4`
 - Bastion compute instance in public subnet with:
   - **2 OCPUs**, **16 GB RAM** (flex shape)
   - extra **200 GB block volume** attached
@@ -125,6 +130,148 @@ This stack also supports **automatic AD discovery**: if `availability_domain` is
    ```
 
 > For local CLI usage, ensure your OCI API key profile (typically `DEFAULT`) is configured in your OCI config.
+
+## Troubleshooting
+
+### Shared MySQL configuration (Blue/Green) parent configuration lookup
+
+If plan/apply fails with:
+
+- `Unable to resolve parent MySQL configuration. Set mysql_configuration_parent_id explicitly for this tenancy/region.`
+
+set `mysql_configuration_parent_id` in your tfvars to an existing **ACTIVE DEFAULT** MySQL configuration OCID for the selected shape/region. By default, this stack auto-discovers that parent configuration from OCI.
+
+### Exact errors observed in manual runs
+
+- `Error: could not infer resource state via reflection`
+- `Error acquiring the state lock`
+- `Error: Missing required argument` (`resolver_id`)
+- `Error in function call ... Call to function "coalesce" failed: no non-null, non-empty-string arguments`
+
+### Destroy (OCI reflection/polling errors)
+
+For long-running OCI deletes (especially GoldenGate/MySQL), Terraform can sometimes fail with:
+
+- `Error: could not infer resource state via reflection`
+
+When this appears during `terraform destroy`, use this deterministic remediation flow:
+
+1. Run normal destroy:
+
+   ```bash
+   terraform destroy -auto-approve -no-color
+   ```
+
+2. Verify actual lifecycle state in OCI for affected resources (GoldenGate/MySQL).
+   - If OCI shows `DELETING`, wait and re-check.
+   - If OCI shows `DELETED` but Terraform still tracks the object, continue to step 3.
+
+3. Remove only stale, already-deleted resources from Terraform state:
+
+   ```bash
+   terraform state rm <resource-address>
+   ```
+
+   Examples used in this stack during recovery:
+
+   ```bash
+   terraform state rm oci_golden_gate_connection.mysql_green_connection[0]
+   terraform state rm oci_mysql_mysql_db_system.green oci_mysql_mysql_db_system.blue
+   ```
+
+4. Re-run destroy:
+
+   ```bash
+   terraform destroy -auto-approve -no-color
+   ```
+
+5. Validate clean completion:
+
+   ```bash
+   terraform state list
+   terraform plan -destroy -no-color
+   terraform plan -no-color
+   ```
+
+Operational rule: treat reflection errors as possible provider polling instability; always verify OCI truth first, then reconcile Terraform state, then retry.
+
+### Apply (manual resume/recovery)
+
+If manual `terraform apply` fails mid-run, use the following recovery patterns.
+
+### 1) DNS resolver_id error
+
+If you see:
+
+- `Error: Missing required argument`
+- `with data.oci_dns_resolver.main ... The argument "resolver_id" is required`
+
+This stack now uses a safer resolver/view lookup (`oci_dns_views` for PRIVATE scope), with graceful fallback behavior when no private view is discoverable.
+
+### 2) GoldenGate reflection/polling instability
+
+If you see during GoldenGate connection/assignment create:
+
+- `Error: could not infer resource state via reflection`
+
+Treat this as potential provider polling instability. Verify actual OCI lifecycle state before deciding next action.
+
+### 3) Terraform state lock during retry
+
+If you see:
+
+- `Error acquiring the state lock`
+
+it usually means another apply/plan is still running or left a stale lock.
+
+- If a Terraform run is still active: wait for it to complete.
+- If no Terraform run is active: release stale lock with:
+
+  ```bash
+  terraform force-unlock <LOCK_ID>
+  ```
+
+### 4) Tainted GoldenGate connection after interrupted apply
+
+If plan shows a GG connection as tainted and you want to retry without forced replacement first:
+
+```bash
+terraform untaint 'oci_golden_gate_connection.mysql_green_connection[0]'
+```
+
+Use the Blue equivalent as needed.
+
+### 5) Recommended manual recovery command sequence
+
+```bash
+terraform validate -no-color
+terraform force-unlock <LOCK_ID>   # only if no active Terraform run
+terraform untaint 'oci_golden_gate_connection.mysql_green_connection[0]'
+terraform plan -no-color
+terraform apply -no-color
+```
+
+### Sequencing & Idempotency Notes (DNS + GoldenGate)
+
+You are correct that Terraform is declarative and idempotent, and IDs should flow automatically through references. In this stack, the intended dependency chain is:
+
+1. **Network + MySQL**
+2. **GoldenGate deployment** (depends on both MySQL DB Systems)
+3. **GoldenGate connections** (depend on deployment)
+4. **GoldenGate assignments** (depend on deployment + corresponding connection)
+5. **Private DNS zone + RRsets** (RRsets depend on zone and target IP-producing resources)
+
+### Hardening implemented for this stack
+
+- DNS resolver lookup replaced with `oci_dns_views` (PRIVATE scope) to avoid brittle `resolver_id` handoff behavior.
+- Private DNS resources are now conditionally created only when a usable view ID exists (explicit `private_dns_view_id` or discovered PRIVATE view).
+- GoldenGate connections now set `trigger_refresh = false` to reduce provider-induced replacement noise.
+- GoldenGate connection/assignment timeouts increased for long OCI control-plane operations.
+- Explicit `depends_on` has been added/expanded for assignment sequencing.
+
+### Important caveat
+
+Even with correct dependency wiring, OCI provider polling can still intermittently return reflection/timeouts during long-running GoldenGate operations. That is a provider/runtime behavior (not always a dependency bug), and recovery is done via the runbooks above.
 
 ## Blue-Green Logical Migration: What Else You Should Add
 

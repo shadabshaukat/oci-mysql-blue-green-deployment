@@ -33,6 +33,14 @@ variableGroups:
       - mysql_blue_hostname_label
       - mysql_green_environment_tag
       - mysql_blue_environment_tag
+      - mysql_shared_configuration_enabled
+      - mysql_shared_configuration_display_name
+      - mysql_shared_configuration_description
+      - mysql_configuration_parent_id
+      - mysql_config_binlog_expire_logs_seconds
+      - mysql_config_binlog_row_metadata
+      - mysql_config_binlog_transaction_compression
+      - mysql_config_replica_parallel_workers
   - title: "Bastion Configuration"
     variables:
       - bastion_shape
@@ -157,6 +165,47 @@ variables:
   mysql_blue_environment_tag:
     type: string
     default: blue-prod
+    required: true
+
+  mysql_shared_configuration_enabled:
+    type: boolean
+    default: true
+    required: true
+
+  mysql_shared_configuration_display_name:
+    type: string
+    default: MySQL-BlueGreen-Shared-Config
+    required: true
+
+  mysql_shared_configuration_description:
+    type: string
+    default: Shared MySQL configuration for Blue/Green logical replication and GoldenGate readiness
+    required: true
+
+  mysql_configuration_parent_id:
+    type: string
+    title: Parent MySQL Configuration OCID
+    description: "Optional. Leave empty to auto-discover ACTIVE DEFAULT configuration for selected shape. Set explicitly if auto-discovery is not available in your tenancy/region."
+    required: false
+
+  mysql_config_binlog_expire_logs_seconds:
+    type: integer
+    default: 604800
+    required: true
+
+  mysql_config_binlog_row_metadata:
+    type: string
+    default: FULL
+    required: true
+
+  mysql_config_binlog_transaction_compression:
+    type: boolean
+    default: false
+    required: true
+
+  mysql_config_replica_parallel_workers:
+    type: integer
+    default: 4
     required: true
 
   bastion_shape:

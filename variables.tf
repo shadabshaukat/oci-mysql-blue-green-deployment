@@ -193,6 +193,54 @@ variable "mysql_blue_environment_tag" {
   default     = "blue-prod"
 }
 
+variable "mysql_shared_configuration_enabled" {
+  description = "Create and attach a shared OCI MySQL configuration for both Blue and Green DB systems"
+  type        = bool
+  default     = true
+}
+
+variable "mysql_shared_configuration_display_name" {
+  description = "Display name for shared OCI MySQL configuration used by Blue/Green DB systems"
+  type        = string
+  default     = "MySQL-BlueGreen-Shared-Config"
+}
+
+variable "mysql_shared_configuration_description" {
+  description = "Description for shared OCI MySQL configuration"
+  type        = string
+  default     = "Shared MySQL configuration for Blue/Green logical replication and GoldenGate readiness"
+}
+
+variable "mysql_configuration_parent_id" {
+  description = "Optional parent/default MySQL configuration OCID. If null, Terraform discovers ACTIVE DEFAULT configuration for selected shape in compartment"
+  type        = string
+  default     = null
+}
+
+variable "mysql_config_binlog_expire_logs_seconds" {
+  description = "binlog_expire_logs_seconds for shared MySQL configuration"
+  type        = number
+  default     = 604800
+}
+
+variable "mysql_config_binlog_row_metadata" {
+  description = "binlog_row_metadata for shared MySQL configuration"
+  type        = string
+  default     = "FULL"
+}
+
+variable "mysql_config_binlog_transaction_compression" {
+  description = "binlog_transaction_compression for shared MySQL configuration"
+  type        = bool
+  default     = false
+}
+
+variable "mysql_config_replica_parallel_workers" {
+  description = "replica_parallel_workers for shared MySQL configuration"
+  type        = number
+  default     = 4
+}
+
 variable "mysql_port" {
   description = "MySQL port"
   type        = number
