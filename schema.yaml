@@ -1,0 +1,257 @@
+title: "OCI MySQL Blue/Green Deployment Stack"
+description: "Deploys VCN, dual OCI MySQL HA environments (Green 8.4.8 + Blue 8.0.45), OCI GoldenGate connections/assignments, private NLB, and private DNS records."
+schemaVersion: 1.1.0
+version: "2026.03.01"
+locale: "en"
+
+variableGroups:
+  - title: "Placement"
+    variables:
+      - compartment_ocid
+      - region
+      - availability_domain
+  - title: "Access & Credentials"
+    variables:
+      - ssh_public_key
+      - mysql_admin_password
+      - goldengate_admin_password
+  - title: "Network"
+    variables:
+      - vcn_cidr
+      - public_subnet_cidr
+      - private_subnet_cidr
+  - title: "MySQL Configuration"
+    variables:
+      - mysql_admin_username
+      - mysql_shape_name
+      - mysql_storage_size_in_gb
+      - mysql_green_version
+      - mysql_blue_version
+      - mysql_green_display_name
+      - mysql_blue_display_name
+      - mysql_green_hostname_label
+      - mysql_blue_hostname_label
+      - mysql_green_environment_tag
+      - mysql_blue_environment_tag
+  - title: "Bastion Configuration"
+    variables:
+      - bastion_shape
+      - bastion_os_version
+      - bastion_ocpus
+      - bastion_memory_in_gbs
+      - bastion_boot_volume_size_in_gbs
+      - bastion_block_volume_size_in_gbs
+  - title: "GoldenGate"
+    variables:
+      - goldengate_enabled
+      - goldengate_admin_username
+      - goldengate_cpu_core_count
+      - goldengate_deployment_display_name
+      - goldengate_deployment_name
+  - title: "Private DNS"
+    variables:
+      - private_dns_zone_name
+      - private_dns_record_ttl
+      - dns_nlb_app_hostname
+      - dns_nlb_blue_hostname
+      - dns_nlb_green_hostname
+
+variables:
+  region:
+    type: string
+    title: Region
+    default: ap-osaka-1
+    required: true
+
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    title: Compartment
+    required: true
+
+  availability_domain:
+    type: string
+    title: Availability Domain
+    description: "Optional. Leave empty to auto-select first AD in selected region. Or enter explicit value (e.g. XXXX:AP-OSAKA-1-AD-1)."
+    required: false
+
+  ssh_public_key:
+    type: string
+    title: SSH Public Key
+    required: true
+
+  mysql_admin_password:
+    type: password
+    title: MySQL Admin Password
+    required: true
+
+  goldengate_admin_password:
+    type: password
+    title: GoldenGate Admin Password
+    required: false
+
+  vcn_cidr:
+    type: string
+    default: 10.30.0.0/16
+    required: true
+
+  public_subnet_cidr:
+    type: string
+    default: 10.30.10.0/24
+    required: true
+
+  private_subnet_cidr:
+    type: string
+    default: 10.30.20.0/24
+    required: true
+
+  mysql_admin_username:
+    type: string
+    default: admin
+    required: true
+
+  mysql_green_version:
+    type: string
+    default: 8.4.8
+    required: true
+
+  mysql_blue_version:
+    type: string
+    default: 8.0.45
+    required: true
+
+  mysql_shape_name:
+    type: string
+    default: MySQL.2
+    required: true
+
+  mysql_storage_size_in_gb:
+    type: integer
+    default: 50
+    required: true
+
+  mysql_green_display_name:
+    type: string
+    default: MySQL-Green
+    required: true
+
+  mysql_blue_display_name:
+    type: string
+    default: MySQL-Blue
+    required: true
+
+  mysql_green_hostname_label:
+    type: string
+    default: mysql-green
+    required: true
+
+  mysql_blue_hostname_label:
+    type: string
+    default: mysql-blue
+    required: true
+
+  mysql_green_environment_tag:
+    type: string
+    default: green-staging
+    required: true
+
+  mysql_blue_environment_tag:
+    type: string
+    default: blue-prod
+    required: true
+
+  bastion_shape:
+    type: string
+    default: VM.Standard.E5.Flex
+    required: true
+
+  bastion_os_version:
+    type: string
+    default: "8"
+    required: true
+
+  bastion_ocpus:
+    type: integer
+    default: 2
+    required: true
+
+  bastion_memory_in_gbs:
+    type: integer
+    default: 16
+    required: true
+
+  bastion_boot_volume_size_in_gbs:
+    type: integer
+    default: 100
+    required: true
+
+  bastion_block_volume_size_in_gbs:
+    type: integer
+    default: 200
+    required: true
+
+  goldengate_enabled:
+    type: boolean
+    default: true
+    required: true
+
+  goldengate_admin_username:
+    type: string
+    default: oggadmin
+    required: true
+
+  goldengate_cpu_core_count:
+    type: integer
+    default: 2
+    required: true
+
+  goldengate_deployment_display_name:
+    type: string
+    default: OCI-Goldengate-MySQL-OGG
+    required: true
+
+  goldengate_deployment_name:
+    type: string
+    default: mysql-ogg
+    required: true
+
+  private_dns_zone_name:
+    type: string
+    default: mysql.local
+    required: true
+
+  private_dns_record_ttl:
+    type: integer
+    default: 30
+    required: true
+
+  dns_nlb_app_hostname:
+    type: string
+    default: nlb-app
+    required: true
+
+  dns_nlb_blue_hostname:
+    type: string
+    default: nlb-app-blue
+    required: true
+
+  dns_nlb_green_hostname:
+    type: string
+    default: nlb-app-green
+    required: true
+
+outputGroups:
+  - title: "Core Outputs"
+    outputs:
+      - vcn_id
+      - mysql_db_system_id
+      - mysql_db_system_ip
+      - mysql_blue_db_system_id
+      - mysql_blue_db_system_ip
+      - mysql_db_system_endpoint
+      - mysql_blue_db_system_endpoint
+      - bastion_public_ip
+      - nlb_private_ip
+      - goldengate_deployment_id
+      - goldengate_mysql_connection_id
+      - goldengate_mysql_blue_connection_id
+      - dns_nlb_app_fqdn

@@ -1,0 +1,31 @@
+oci_auth           = "ApiKey"
+oci_config_profile = "DEFAULT"
+region             = "ap-osaka-1"
+
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaafhegmvy2da7xzh2b5jbmhdkfr4cr4e37m5filt4zgxs6mfl7icua"
+compartment_ocid = "ocid1.compartment.oc1..aaaaaaaacoqxp2n77ra2343maw2px4rlrtzqaw5ord6be2cbrbwlrpqwegxa"
+
+mysql_admin_password                              = "RAbbithole1234##"
+goldengate_admin_password                         = "RAbbithole1234##"
+mysql_database_name                               = "mysql"
+mysql_green_version                               = "8.4.8"
+mysql_blue_version                                = "8.0.45"
+mysql_green_display_name                          = "MySQL-Green"
+mysql_blue_display_name                           = "MySQL-Blue"
+mysql_green_hostname_label                        = "mysql-green"
+mysql_blue_hostname_label                         = "mysql-blue"
+mysql_green_environment_tag                       = "green-staging"
+mysql_blue_environment_tag                        = "blue-prod"
+goldengate_deployment_display_name                = "OCI-Goldengate-MySQL-OGG"
+goldengate_deployment_name                        = "mysql-ogg"
+goldengate_mysql_technology_type                  = "MYSQL_SERVER"
+goldengate_mysql_security_protocol                = "PLAIN"
+goldengate_connection_assignment_is_lock_override = false
+private_dns_zone_name                             = "mysql.local"
+private_dns_record_ttl                            = 30
+dns_nlb_app_hostname                              = "nlb-app"
+dns_nlb_blue_hostname                             = "nlb-app-blue"
+dns_nlb_green_hostname                            = "nlb-app-green"
+bastion_os_version                                = "8"
+
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKxKXIbWKafvLih/JiQ/ozHphLUNP7yl60/3RYuzJop6 shadab@Shadabs-MacBook-Pro.local"

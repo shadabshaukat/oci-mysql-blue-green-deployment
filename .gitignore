@@ -1,0 +1,21 @@
+# Terraform working directory
+.terraform/
+
+# Terraform state
+*.tfstate
+*.tfstate.*
+
+# Terraform variable files (can contain secrets)
+#terraform.tfvars
+#*.auto.tfvars
+
+# Plan files
+*.tfplan
+plan.out
+
+# CLI crash logs
+crash.log
+crash.*.log
+
+# OS/editor noise
+.DS_Store
