@@ -2,19 +2,22 @@ locals {
   private_dns_zone_name_normalized = trimsuffix(var.private_dns_zone_name, ".")
 }
 
-data "oci_core_vcn_dns_resolver_association" "main" {
-  vcn_id = oci_core_vcn.main.id
-}
-
-data "oci_dns_resolver" "main" {
-  resolver_id = data.oci_core_vcn_dns_resolver_association.main.dns_resolver_id
+data "oci_dns_views" "private" {
+  compartment_id = var.compartment_ocid
+  scope          = "PRIVATE"
 }
 
 locals {
-  effective_private_dns_view_id = coalesce(var.private_dns_view_id, data.oci_dns_resolver.main.default_view_id)
+  private_dns_view_id_override = try(trimspace(var.private_dns_view_id), "")
+
+  effective_private_dns_view_id = local.private_dns_view_id_override != "" ? local.private_dns_view_id_override : try(data.oci_dns_views.private.views[0].id, null)
+
+  private_dns_enabled = local.effective_private_dns_view_id != null && local.effective_private_dns_view_id != ""
 }
 
 resource "oci_dns_zone" "private_mysql_zone" {
+  count = local.private_dns_enabled ? 1 : 0
+
   compartment_id = var.compartment_ocid
   name           = "${local.private_dns_zone_name_normalized}."
   scope          = "PRIVATE"
@@ -23,7 +26,9 @@ resource "oci_dns_zone" "private_mysql_zone" {
 }
 
 resource "oci_dns_rrset" "nlb_app_main" {
-  zone_name_or_id = oci_dns_zone.private_mysql_zone.id
+  count = local.private_dns_enabled ? 1 : 0
+
+  zone_name_or_id = oci_dns_zone.private_mysql_zone[0].id
   domain          = "${var.dns_nlb_app_hostname}.${local.private_dns_zone_name_normalized}"
   rtype           = "A"
 
@@ -36,7 +41,9 @@ resource "oci_dns_rrset" "nlb_app_main" {
 }
 
 resource "oci_dns_rrset" "nlb_app_blue" {
-  zone_name_or_id = oci_dns_zone.private_mysql_zone.id
+  count = local.private_dns_enabled ? 1 : 0
+
+  zone_name_or_id = oci_dns_zone.private_mysql_zone[0].id
   domain          = "${var.dns_nlb_blue_hostname}.${local.private_dns_zone_name_normalized}"
   rtype           = "A"
 
@@ -49,7 +56,9 @@ resource "oci_dns_rrset" "nlb_app_blue" {
 }
 
 resource "oci_dns_rrset" "nlb_app_green" {
-  zone_name_or_id = oci_dns_zone.private_mysql_zone.id
+  count = local.private_dns_enabled ? 1 : 0
+
+  zone_name_or_id = oci_dns_zone.private_mysql_zone[0].id
   domain          = "${var.dns_nlb_green_hostname}.${local.private_dns_zone_name_normalized}"
   rtype           = "A"
 

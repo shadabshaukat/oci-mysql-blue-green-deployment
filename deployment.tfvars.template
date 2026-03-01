@@ -39,6 +39,14 @@ mysql_green_hostname_label = "mysql-green"
 mysql_blue_hostname_label  = "mysql-blue"
 mysql_green_environment_tag = "green-staging"
 mysql_blue_environment_tag  = "blue-prod"
+mysql_shared_configuration_enabled          = true
+mysql_shared_configuration_display_name     = "MySQL-BlueGreen-Shared-Config"
+mysql_shared_configuration_description      = "Shared MySQL configuration for Blue/Green logical replication and GoldenGate readiness"
+mysql_configuration_parent_id               = null
+mysql_config_binlog_expire_logs_seconds     = 604800
+mysql_config_binlog_row_metadata            = "FULL"
+mysql_config_binlog_transaction_compression = false
+mysql_config_replica_parallel_workers       = 4
 
 bastion_shape                   = "VM.Standard.E5.Flex"
 bastion_os_version              = "8"

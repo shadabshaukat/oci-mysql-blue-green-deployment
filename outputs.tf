@@ -93,7 +93,7 @@ output "goldengate_blue_connection_assignment_id" {
 
 output "private_dns_zone_id" {
   description = "Private DNS zone OCID"
-  value       = oci_dns_zone.private_mysql_zone.id
+  value       = try(oci_dns_zone.private_mysql_zone[0].id, null)
 }
 
 output "dns_nlb_app_fqdn" {
