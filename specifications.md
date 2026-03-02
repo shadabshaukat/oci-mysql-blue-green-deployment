@@ -35,8 +35,8 @@ Provision a reusable OCI Terraform stack for MySQL blue-green foundation using l
 
 4. **OCI GoldenGate**
    - Deployment type: `MYSQL`
-   - Connection to OCI MySQL private IP
-   - Credentials supplied by Terraform variables
+   - **Temporary stability mode:** only deployment is active
+   - GoldenGate connection and connection-assignment resources are currently disabled in code
 
 5. **Placement/AD behavior**
    - Region variable default: `ap-osaka-1`
@@ -673,6 +673,27 @@ terraform apply -no-color
   - `deployment.tfvars.template`
   - `env/dev.tfvars`, `env/test.tfvars`, `env/prod.tfvars`
   - `schema.yaml`
+
+### 2026-03-02 — Temporary disablement of GoldenGate connections/assignments (stability mode)
+
+- User-requested rollback applied for stability during stack apply runs.
+- In `goldengate.tf`, GoldenGate connection resources and connection-assignment resources are commented out/disabled.
+- GoldenGate deployment resource remains active (controlled by `goldengate_enabled`).
+- Output behavior updated in `outputs.tf`:
+  - `goldengate_mysql_connection_id = null`
+  - `goldengate_mysql_blue_connection_id = null`
+  - `goldengate_connection_assignment_id = null`
+  - `goldengate_blue_connection_assignment_id = null`
+- Variable templates and docs aligned with temporary mode:
+  - `terraform.tfvars.example`
+  - `deployment.tfvars.template`
+  - `README.md`
+  - `TERRAFORM_DEPLOYMENT.md`
+  - `specifications.md`
+
+#### Temporary-mode operational expectation
+- When `goldengate_enabled = true`, Terraform creates only the GoldenGate deployment.
+- Connection-related variables are retained for future re-enable, but currently not used by active resources.
 
 ---
 

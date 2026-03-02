@@ -11,7 +11,7 @@ This guide explains how to deploy the stack in a repeatable way for any OCI envi
 - OCI MySQL HA DB System (`8.0.45`, `MySQL.2`, `50GB`, hostname `mysql-green`)
 - Bastion Compute (`2 OCPU`, `16 GB RAM`) + attached `200 GB` block volume
 - Private NLB with MySQL backend on port `3306`
-- OCI GoldenGate deployment + MySQL connection
+- OCI GoldenGate deployment (connection + assignment resources temporarily disabled for stability)
 
 ---
 
@@ -56,6 +56,11 @@ Optional:
 
 - `availability_domain` (if omitted, stack tries to auto-discover first AD)
 - CIDRs, names, shape overrides
+
+Temporary GoldenGate stability mode:
+- Keep `goldengate_enabled = true` if you want the deployment resource created.
+- GoldenGate connection and connection-assignment resources are currently disabled in code.
+- Connection-specific tfvars are retained for future re-enable, but not used right now.
 
 ---
 
@@ -117,7 +122,8 @@ Important outputs include:
 - `mysql_db_system_endpoint`
 - `bastion_public_ip`
 - `nlb_private_ip`
-- GoldenGate resource IDs
+- `goldengate_deployment_id`
+- Connection/assignment outputs are intentionally `null` while temporarily disabled
 
 ---
 

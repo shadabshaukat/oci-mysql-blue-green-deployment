@@ -36,6 +36,10 @@ resource "oci_golden_gate_deployment" "mysql_deployment" {
   }
 }
 
+/*
+Temporarily disabled due to provider/runtime instability during apply.
+Re-enable once GoldenGate connection/assignment creation is stable.
+
 resource "oci_golden_gate_connection" "mysql_green_connection" {
   count = var.goldengate_enabled ? 1 : 0
 
@@ -137,3 +141,4 @@ resource "oci_golden_gate_connection_assignment" "mysql_blue_connection_assignme
     delete = "60m"
   }
 }
+*/

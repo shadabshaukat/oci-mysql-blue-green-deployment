@@ -49,10 +49,14 @@ goldengate_admin_username                         = "oggadmin"
 goldengate_cpu_core_count                         = 2
 goldengate_deployment_display_name                = "OCI-Goldengate-MySQL-OGG"
 goldengate_deployment_name                        = "mysql-ogg"
-goldengate_connection_assignment_is_lock_override = false
-goldengate_mysql_technology_type                  = "MYSQL_SERVER"
-goldengate_mysql_security_protocol                = "PLAIN"
-mysql_database_name                               = "mysql"
+# NOTE (temporary stability mode):
+# GoldenGate connection + connection assignment resources are disabled in code.
+# Keep only deployment settings active for now; connection-related settings remain
+# commented out until re-enabled.
+# goldengate_connection_assignment_is_lock_override = false
+# goldengate_mysql_technology_type                  = "MYSQL_SERVER"
+# goldengate_mysql_security_protocol                = "PLAIN"
+# mysql_database_name                               = "mysql"
 
 private_dns_zone_name  = "mysql.local"
 private_dns_record_ttl = 30

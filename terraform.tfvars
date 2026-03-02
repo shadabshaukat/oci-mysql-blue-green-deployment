@@ -1,6 +1,6 @@
 oci_auth           = "ApiKey"
 oci_config_profile = "DEFAULT"
-region             = "ap-osaka-1"
+region             = "ap-tokyo-1"
 
 tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaafhegmvy2da7xzh2b5jbmhdkfr4cr4e37m5filt4zgxs6mfl7icua"
 compartment_ocid = "ocid1.compartment.oc1..aaaaaaaacoqxp2n77ra2343maw2px4rlrtzqaw5ord6be2cbrbwlrpqwegxa"
@@ -24,11 +24,16 @@ mysql_config_binlog_expire_logs_seconds           = 604800
 mysql_config_binlog_row_metadata                  = "FULL"
 mysql_config_binlog_transaction_compression       = false
 mysql_config_replica_parallel_workers             = 4
+# NOTE (temporary stability mode):
+# GoldenGate connection + connection assignment resources are disabled in code.
+# Keep only deployment settings active for now; connection-related settings remain
+# commented out until re-enabled.
 goldengate_deployment_display_name                = "OCI-Goldengate-MySQL-OGG"
 goldengate_deployment_name                        = "mysql-ogg"
-goldengate_mysql_technology_type                  = "MYSQL_SERVER"
-goldengate_mysql_security_protocol                = "PLAIN"
-goldengate_connection_assignment_is_lock_override = false
+# goldengate_mysql_technology_type                  = "MYSQL_SERVER"
+# goldengate_mysql_security_protocol                = "PLAIN"
+# goldengate_connection_assignment_is_lock_override = false
+# mysql_database_name                               = "mysql"
 private_dns_zone_name                             = "mysql.local"
 private_dns_record_ttl                            = 30
 dns_nlb_app_hostname                              = "nlb-app"
