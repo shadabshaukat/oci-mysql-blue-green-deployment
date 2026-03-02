@@ -25,8 +25,8 @@ It creates:
   - cloud-init installs latest available `mysql-shell`
 - Private OCI Network Load Balancer with **both Green and Blue MySQL backends** on port **3306**
 - OCI GoldenGate MySQL deployment with:
-  - Green MySQL connection + assignment
-  - Blue MySQL connection + assignment
+  - **Deployment resource active**
+  - **Connection and connection assignment resources temporarily disabled** due to provider/runtime stability issues during apply
 - OCI Private DNS zone/records for application routing:
   - `nlb-app.mysql.local` → NLB private IP
   - `nlb-app-green.mysql.local` → Green MySQL private IP
@@ -43,7 +43,7 @@ It creates:
 - `mysql.tf` - OCI MySQL HA DB Systems (Green and Blue)
 - `compute.tf` - bastion VM + block volume + cloud-init
 - `nlb.tf` - private NLB + backend set/listener + Green/Blue backends
-- `goldengate.tf` - OGG deployment + Green/Blue connections + assignments
+- `goldengate.tf` - OGG deployment (connections/assignments currently disabled)
 - `dns.tf` - private DNS zone + application A records
 - `outputs.tf` - key outputs
 - `terraform.tfvars.example` - example values
@@ -216,6 +216,8 @@ If you see during GoldenGate connection/assignment create:
 
 Treat this as potential provider polling instability. Verify actual OCI lifecycle state before deciding next action.
 
+> Temporary mode note: this stack currently disables GoldenGate **connection** and **connection assignment** resources in code. If `goldengate_enabled = true`, only the GoldenGate deployment is created.
+
 ### 3) Terraform state lock during retry
 
 If you see:
@@ -241,12 +243,13 @@ terraform untaint 'oci_golden_gate_connection.mysql_green_connection[0]'
 
 Use the Blue equivalent as needed.
 
+> This step is not applicable while GG connections are temporarily disabled.
+
 ### 5) Recommended manual recovery command sequence
 
 ```bash
 terraform validate -no-color
 terraform force-unlock <LOCK_ID>   # only if no active Terraform run
-terraform untaint 'oci_golden_gate_connection.mysql_green_connection[0]'
 terraform plan -no-color
 terraform apply -no-color
 ```
@@ -318,4 +321,5 @@ To make this a production-ready blue-green deployment using logical replication:
 - This stack has been updated and validated against OCI Terraform provider schema for **oracle/oci v8.3.0** (including `oci_mysql_mysql_db_system`, `oci_core_instance`, `oci_network_load_balancer_*`, and `oci_golden_gate_*` resources).
 - OCI MySQL shape `MySQL.2` corresponds to the requested sizing profile.
 - `mysql-shell` package installation in cloud-init uses Oracle Linux repositories and installs the latest available version at provisioning time.
-- GoldenGate deployment/connection are created only when `goldengate_enabled = true`.
+- GoldenGate deployment is created only when `goldengate_enabled = true`.
+- GoldenGate connection and connection assignment resources are temporarily disabled for stability; related outputs are currently `null`.

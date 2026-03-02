@@ -72,23 +72,23 @@ output "goldengate_deployment_id" {
 }
 
 output "goldengate_mysql_connection_id" {
-  description = "GoldenGate MySQL Green connection OCID"
-  value       = var.goldengate_enabled ? oci_golden_gate_connection.mysql_green_connection[0].id : null
+  description = "GoldenGate MySQL Green connection OCID (temporarily disabled)"
+  value       = null
 }
 
 output "goldengate_mysql_blue_connection_id" {
-  description = "GoldenGate MySQL Blue connection OCID"
-  value       = var.goldengate_enabled ? oci_golden_gate_connection.mysql_blue_connection[0].id : null
+  description = "GoldenGate MySQL Blue connection OCID (temporarily disabled)"
+  value       = null
 }
 
 output "goldengate_connection_assignment_id" {
-  description = "GoldenGate MySQL Green connection assignment OCID"
-  value       = var.goldengate_enabled ? oci_golden_gate_connection_assignment.mysql_connection_assignment[0].id : null
+  description = "GoldenGate MySQL Green connection assignment OCID (temporarily disabled)"
+  value       = null
 }
 
 output "goldengate_blue_connection_assignment_id" {
-  description = "GoldenGate MySQL Blue connection assignment OCID"
-  value       = var.goldengate_enabled ? oci_golden_gate_connection_assignment.mysql_blue_connection_assignment[0].id : null
+  description = "GoldenGate MySQL Blue connection assignment OCID (temporarily disabled)"
+  value       = null
 }
 
 output "private_dns_zone_id" {

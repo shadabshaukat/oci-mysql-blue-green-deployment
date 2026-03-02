@@ -44,6 +44,12 @@ goldengate_admin_password = "ChangeMe_OGG_Strong_#Password_123"
 # bastion_ocpus                    = 2
 # bastion_memory_in_gbs            = 16
 # bastion_block_volume_size_in_gbs = 200
+#
+# GoldenGate note (temporary stability mode):
+# - Deployment resource remains supported.
+# - Connection + connection assignment resources are currently disabled in code.
+# - The connection-related variables below are intentionally left commented/unused
+#   until those resources are re-enabled.
 # goldengate_deployment_display_name = "OCI-Goldengate-MySQL-OGG"
 # goldengate_deployment_name         = "mysql-ogg"
 # goldengate_mysql_technology_type   = "MYSQL_SERVER"
