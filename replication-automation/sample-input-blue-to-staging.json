@@ -1,0 +1,34 @@
+{
+  "profile": "DEFAULT",
+  "config_file": "/Users/shadab/.oci/config",
+  "region": "ap-tokyo-1",
+
+  "compartment_id": "ocid1.compartment.oc1..aaaaaaaacoqxp2n77ra2343maw2px4rlrtzqaw5ord6be2cbrbwlrpqwegxa",
+
+  "db_a_id": "<MYSQL_BLUE_DB_OCID>",
+  "backup_display_name": "Blue-manual-backup-20260302-184700",
+  "backup_type": "FULL",
+
+  "target_subnet_id": "<TARGET_PRIVATE_SUBNET_OCID>",
+  "target_shape": "MySQL.2",
+  "target_display_name": "MySQL-Staging",
+  "target_hostname": "mysql-staging",
+  "target_admin_username": "admin",
+  "target_admin_password": "<TARGET_ADMIN_PASSWORD>",
+  "target_is_ha": "true",
+  "target_ad": "<AP_TOKYO_AD_NAME>",
+  "target_mysql_version": "8.4.8",
+
+  "source_hostname": "<MYSQL_BLUE_PRIVATE_IP_OR_FQDN>",
+  "source_port": "3306",
+  "repl_user": "<REPLICATION_USER_ON_BLUE>",
+  "repl_password": "<REPLICATION_USER_PASSWORD>",
+  "source_ssl_mode": "REQUIRED",
+
+  "channel_display_name": "Blue-to-Staging-channel",
+  "channel_name": "blue_to_staging",
+  "target_applier_username": "",
+
+  "poll_interval": "30",
+  "poll_timeout": "14400"
+}
