@@ -1,0 +1,427 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_NAME="Blue-to-Green-Replication-Setup"
+
+NON_INTERACTIVE=false
+AUTO_YES=false
+INPUT_FILE=""
+
+CONFIG_FILE="${OCI_CLI_CONFIG_FILE:-/Users/$(id -un)/.oci/config}"
+PROFILE="${OCI_CLI_PROFILE:-DEFAULT}"
+REGION_OVERRIDE="${OCI_CLI_REGION:-}"
+
+POLL_INTERVAL=30
+POLL_TIMEOUT=14400
+
+COMPARTMENT_ID=""
+DB_A_ID=""
+BACKUP_DISPLAY_NAME=""
+BACKUP_TYPE="FULL"
+
+TARGET_SUBNET_ID=""
+TARGET_SHAPE="MySQL.2"
+TARGET_DISPLAY_NAME="MySQL-Staging"
+TARGET_HOSTNAME="mysql-staging"
+TARGET_ADMIN_USERNAME="admin"
+TARGET_ADMIN_PASSWORD=""
+TARGET_IS_HA="true"
+TARGET_AD=""
+TARGET_MYSQL_VERSION=""
+
+SOURCE_HOSTNAME=""
+SOURCE_PORT="3306"
+REPL_USER=""
+REPL_PASSWORD=""
+SOURCE_SSL_MODE="REQUIRED"
+
+CHANNEL_DISPLAY_NAME="Blue-to-Staging-channel"
+CHANNEL_NAME="blue_to_staging"
+TARGET_APPLIER_USERNAME=""
+
+log() { printf '[%s] %s\n' "$SCRIPT_NAME" "$*"; }
+die() { printf '[%s] ERROR: %s\n' "$SCRIPT_NAME" "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  Blue-to-Green-Replication-Setup [--non-interactive] [options]
+
+Modes:
+  (default) interactive prompts
+  --non-interactive
+
+Input:
+  --input-file <path>               optional JSON input file
+
+OCI context:
+  --profile <name>
+  --config-file <path>
+  --region <region>
+
+Core:
+  --compartment-id <ocid>
+  --db-a-id <ocid>
+  --backup-display-name <name>
+  --backup-type <FULL|INCREMENTAL>
+
+Target DB:
+  --target-subnet-id <ocid>
+  --target-shape <shape>
+  --target-display-name <name>
+  --target-hostname <hostname-label>
+  --target-admin-username <user>
+  --target-admin-password <password>
+  --target-is-ha <true|false>
+  --target-ad <availability-domain>
+  --target-mysql-version <version>
+
+Channel:
+  --source-hostname <host-or-ip>
+  --source-port <port>
+  --repl-user <replication-user>
+  --repl-password <replication-password>
+  --source-ssl-mode <REQUIRED|VERIFY_CA|VERIFY_IDENTITY|DISABLED>
+  --channel-display-name <name>
+  --channel-name <name>
+  --target-applier-username <user>
+
+Control:
+  --poll-interval <seconds>
+  --poll-timeout <seconds>
+  --yes
+  -h, --help
+USAGE
+}
+
+require_bin() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
+
+prompt() {
+  local message="$1" default_value="${2:-}" value
+  if [[ -n "$default_value" ]]; then
+    read -r -p "$message [$default_value]: " value
+    printf '%s' "${value:-$default_value}"
+  else
+    read -r -p "$message: " value
+    printf '%s' "$value"
+  fi
+}
+
+prompt_secret() {
+  local message="$1" value
+  read -r -s -p "$message: " value
+  printf '\n' >&2
+  printf '%s' "$value"
+}
+
+confirm() {
+  local ans
+  read -r -p "$1 [y/N]: " ans
+  [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+require_non_empty() { [[ -n "$2" ]] || die "Missing required value: $1"; }
+
+config_get() {
+  local profile_name="$1" key="$2" section
+  section="$profile_name"
+  [[ "$profile_name" != "DEFAULT" ]] && section="profile $profile_name"
+  awk -F'=' -v sec="[$section]" -v key="$key" '
+    $0 ~ /^\[/ { in_sec = ($0 == sec) }
+    in_sec {
+      gsub(/^[ \t]+|[ \t]+$/, "", $1)
+      gsub(/^[ \t]+|[ \t]+$/, "", $2)
+      if ($1 == key) { print $2; exit }
+    }
+  ' "$CONFIG_FILE" 2>/dev/null || true
+}
+
+oci_json_auth() {
+  local -a base=("--profile" "$PROFILE")
+  [[ -f "$CONFIG_FILE" ]] && base+=("--config-file" "$CONFIG_FILE")
+  [[ -n "$REGION_OVERRIDE" ]] && base+=("--region" "$REGION_OVERRIDE")
+  oci "${base[@]}" "$@" --output json
+}
+
+extract_id() { jq -r '.data.id // .id // empty'; }
+
+json_get() {
+  local key="$1"
+  [[ -f "$INPUT_FILE" ]] || return 0
+  jq -r --arg k "$key" '.[$k] // empty' "$INPUT_FILE"
+}
+
+set_if_empty_from_json() {
+  local var_name="$1" json_key="$2" current="${!var_name}"
+  if [[ -z "$current" && -f "$INPUT_FILE" ]]; then
+    local val
+    val="$(json_get "$json_key")"
+    [[ -n "$val" ]] && printf -v "$var_name" '%s' "$val"
+  fi
+}
+
+poll_backup_active() {
+  local id="$1" elapsed=0 state
+  while (( elapsed <= POLL_TIMEOUT )); do
+    state="$(oci_json_auth mysql backup get --backup-id "$id" | jq -r '.data["lifecycle-state"] // empty')"
+    log "Backup $id lifecycle-state: ${state:-unknown} (elapsed ${elapsed}s)"
+    [[ "$state" == "ACTIVE" ]] && return 0
+    [[ "$state" == "FAILED" || "$state" == "DELETED" ]] && die "Backup entered terminal state: $state"
+    sleep "$POLL_INTERVAL"; elapsed=$((elapsed + POLL_INTERVAL))
+  done
+  die "Timeout waiting for backup to become ACTIVE"
+}
+
+poll_db_active() {
+  local id="$1" elapsed=0 state
+  while (( elapsed <= POLL_TIMEOUT )); do
+    state="$(oci_json_auth mysql db-system get --db-system-id "$id" | jq -r '.data["lifecycle-state"] // .data.lifecycle_state // empty')"
+    log "DB System $id lifecycle-state: ${state:-unknown} (elapsed ${elapsed}s)"
+    [[ "$state" == "ACTIVE" ]] && return 0
+    [[ "$state" == "FAILED" || "$state" == "DELETED" ]] && die "DB System entered terminal state: $state"
+    sleep "$POLL_INTERVAL"; elapsed=$((elapsed + POLL_INTERVAL))
+  done
+  die "Timeout waiting for DB System to become ACTIVE"
+}
+
+poll_channel_active() {
+  local id="$1" elapsed=0 state
+  while (( elapsed <= POLL_TIMEOUT )); do
+    state="$(oci_json_auth mysql channel get --channel-id "$id" | jq -r '.data["lifecycle-state"] // .data.lifecycle_state // empty')"
+    log "Channel $id lifecycle-state: ${state:-unknown} (elapsed ${elapsed}s)"
+    [[ "$state" == "ACTIVE" ]] && return 0
+    [[ "$state" == "FAILED" || "$state" == "DELETED" || "$state" == "INACTIVE" ]] && die "Channel entered terminal/invalid state: $state"
+    sleep "$POLL_INTERVAL"; elapsed=$((elapsed + POLL_INTERVAL))
+  done
+  die "Timeout waiting for Channel to become ACTIVE"
+}
+
+build_source_json() { jq -cn --arg backup_id "$1" '{sourceType:"BACKUP", backupId:$backup_id}'; }
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --non-interactive) NON_INTERACTIVE=true; shift ;;
+      --yes) AUTO_YES=true; shift ;;
+      --input-file) INPUT_FILE="$2"; shift 2 ;;
+      --profile) PROFILE="$2"; shift 2 ;;
+      --config-file) CONFIG_FILE="$2"; shift 2 ;;
+      --region) REGION_OVERRIDE="$2"; shift 2 ;;
+      --compartment-id) COMPARTMENT_ID="$2"; shift 2 ;;
+      --db-a-id) DB_A_ID="$2"; shift 2 ;;
+      --backup-display-name) BACKUP_DISPLAY_NAME="$2"; shift 2 ;;
+      --backup-type) BACKUP_TYPE="$2"; shift 2 ;;
+      --target-subnet-id) TARGET_SUBNET_ID="$2"; shift 2 ;;
+      --target-shape) TARGET_SHAPE="$2"; shift 2 ;;
+      --target-display-name) TARGET_DISPLAY_NAME="$2"; shift 2 ;;
+      --target-hostname) TARGET_HOSTNAME="$2"; shift 2 ;;
+      --target-admin-username) TARGET_ADMIN_USERNAME="$2"; shift 2 ;;
+      --target-admin-password) TARGET_ADMIN_PASSWORD="$2"; shift 2 ;;
+      --target-is-ha) TARGET_IS_HA="$2"; shift 2 ;;
+      --target-ad) TARGET_AD="$2"; shift 2 ;;
+      --target-mysql-version) TARGET_MYSQL_VERSION="$2"; shift 2 ;;
+      --source-hostname) SOURCE_HOSTNAME="$2"; shift 2 ;;
+      --source-port) SOURCE_PORT="$2"; shift 2 ;;
+      --repl-user) REPL_USER="$2"; shift 2 ;;
+      --repl-password) REPL_PASSWORD="$2"; shift 2 ;;
+      --source-ssl-mode) SOURCE_SSL_MODE="$2"; shift 2 ;;
+      --channel-display-name) CHANNEL_DISPLAY_NAME="$2"; shift 2 ;;
+      --channel-name) CHANNEL_NAME="$2"; shift 2 ;;
+      --target-applier-username) TARGET_APPLIER_USERNAME="$2"; shift 2 ;;
+      --poll-interval) POLL_INTERVAL="$2"; shift 2 ;;
+      --poll-timeout) POLL_TIMEOUT="$2"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Unknown argument: $1" ;;
+    esac
+  done
+}
+
+merge_input_file_defaults() {
+  [[ -n "$INPUT_FILE" ]] || return 0
+  [[ -f "$INPUT_FILE" ]] || die "Input file not found: $INPUT_FILE"
+  set_if_empty_from_json PROFILE profile
+  set_if_empty_from_json CONFIG_FILE config_file
+  set_if_empty_from_json REGION_OVERRIDE region
+  set_if_empty_from_json COMPARTMENT_ID compartment_id
+  set_if_empty_from_json DB_A_ID db_a_id
+  set_if_empty_from_json BACKUP_DISPLAY_NAME backup_display_name
+  set_if_empty_from_json BACKUP_TYPE backup_type
+  set_if_empty_from_json TARGET_SUBNET_ID target_subnet_id
+  set_if_empty_from_json TARGET_SHAPE target_shape
+  set_if_empty_from_json TARGET_DISPLAY_NAME target_display_name
+  set_if_empty_from_json TARGET_HOSTNAME target_hostname
+  set_if_empty_from_json TARGET_ADMIN_USERNAME target_admin_username
+  set_if_empty_from_json TARGET_ADMIN_PASSWORD target_admin_password
+  set_if_empty_from_json TARGET_IS_HA target_is_ha
+  set_if_empty_from_json TARGET_AD target_ad
+  set_if_empty_from_json TARGET_MYSQL_VERSION target_mysql_version
+  set_if_empty_from_json SOURCE_HOSTNAME source_hostname
+  set_if_empty_from_json SOURCE_PORT source_port
+  set_if_empty_from_json REPL_USER repl_user
+  set_if_empty_from_json REPL_PASSWORD repl_password
+  set_if_empty_from_json SOURCE_SSL_MODE source_ssl_mode
+  set_if_empty_from_json CHANNEL_DISPLAY_NAME channel_display_name
+  set_if_empty_from_json CHANNEL_NAME channel_name
+  set_if_empty_from_json TARGET_APPLIER_USERNAME target_applier_username
+  set_if_empty_from_json POLL_INTERVAL poll_interval
+  set_if_empty_from_json POLL_TIMEOUT poll_timeout
+}
+
+ensure_context_defaults() {
+  [[ -n "$REGION_OVERRIDE" ]] || REGION_OVERRIDE="$(config_get "$PROFILE" region)"
+}
+
+interactive_prompt_missing_values() {
+  local default_tenancy=""
+  [[ -f "$CONFIG_FILE" ]] && default_tenancy="$(config_get "$PROFILE" tenancy)"
+
+  PROFILE="$(prompt "OCI CLI profile" "$PROFILE")"
+  CONFIG_FILE="$(prompt "OCI config file path" "$CONFIG_FILE")"
+  REGION_OVERRIDE="$(prompt "OCI region" "${REGION_OVERRIDE:-ap-tokyo-1}")"
+
+  COMPARTMENT_ID="$(prompt "Compartment OCID" "${COMPARTMENT_ID:-$default_tenancy}")"
+  DB_A_ID="$(prompt "Source DB System A OCID" "$DB_A_ID")"
+  BACKUP_DISPLAY_NAME="$(prompt "Backup display name" "${BACKUP_DISPLAY_NAME:-Blue-manual-backup-$(date +%Y%m%d-%H%M%S)}")"
+  BACKUP_TYPE="$(prompt "Backup type (FULL/INCREMENTAL)" "$BACKUP_TYPE")"
+
+  TARGET_SUBNET_ID="$(prompt "Target private subnet OCID" "$TARGET_SUBNET_ID")"
+  TARGET_SHAPE="$(prompt "Target DB System B shape" "$TARGET_SHAPE")"
+  TARGET_DISPLAY_NAME="$(prompt "Target DB System B display name" "$TARGET_DISPLAY_NAME")"
+  TARGET_HOSTNAME="$(prompt "Target DB System B hostname label" "$TARGET_HOSTNAME")"
+  TARGET_ADMIN_USERNAME="$(prompt "Target DB admin username" "$TARGET_ADMIN_USERNAME")"
+  [[ -n "$TARGET_ADMIN_PASSWORD" ]] || TARGET_ADMIN_PASSWORD="$(prompt_secret "Target DB admin password")"
+  TARGET_IS_HA="$(prompt "Target DB highly available? (true/false)" "$TARGET_IS_HA")"
+  TARGET_AD="$(prompt "Target availability domain (required for HA)" "$TARGET_AD")"
+  TARGET_MYSQL_VERSION="$(prompt "Target MySQL version" "$TARGET_MYSQL_VERSION")"
+
+  SOURCE_HOSTNAME="$(prompt "Replication source hostname/IP (DB A)" "$SOURCE_HOSTNAME")"
+  SOURCE_PORT="$(prompt "Replication source port" "$SOURCE_PORT")"
+  REPL_USER="$(prompt "Replication username on source A" "$REPL_USER")"
+  [[ -n "$REPL_PASSWORD" ]] || REPL_PASSWORD="$(prompt_secret "Replication user password on source A")"
+  SOURCE_SSL_MODE="$(prompt "Source SSL mode" "$SOURCE_SSL_MODE")"
+  CHANNEL_DISPLAY_NAME="$(prompt "Channel display name" "$CHANNEL_DISPLAY_NAME")"
+  CHANNEL_NAME="$(prompt "Target channel name" "$CHANNEL_NAME")"
+  TARGET_APPLIER_USERNAME="$(prompt "Target applier username (optional)" "$TARGET_APPLIER_USERNAME")"
+}
+
+validate_required_inputs() {
+  require_non_empty "PROFILE" "$PROFILE"
+  require_non_empty "REGION_OVERRIDE" "$REGION_OVERRIDE"
+  require_non_empty "COMPARTMENT_ID" "$COMPARTMENT_ID"
+  require_non_empty "DB_A_ID" "$DB_A_ID"
+  require_non_empty "BACKUP_TYPE" "$BACKUP_TYPE"
+  require_non_empty "TARGET_SUBNET_ID" "$TARGET_SUBNET_ID"
+  require_non_empty "TARGET_SHAPE" "$TARGET_SHAPE"
+  require_non_empty "TARGET_DISPLAY_NAME" "$TARGET_DISPLAY_NAME"
+  require_non_empty "TARGET_HOSTNAME" "$TARGET_HOSTNAME"
+  require_non_empty "TARGET_ADMIN_USERNAME" "$TARGET_ADMIN_USERNAME"
+  require_non_empty "TARGET_ADMIN_PASSWORD" "$TARGET_ADMIN_PASSWORD"
+  require_non_empty "TARGET_IS_HA" "$TARGET_IS_HA"
+  [[ "$TARGET_IS_HA" != "true" ]] || require_non_empty "TARGET_AD" "$TARGET_AD"
+  require_non_empty "SOURCE_HOSTNAME" "$SOURCE_HOSTNAME"
+  require_non_empty "SOURCE_PORT" "$SOURCE_PORT"
+  require_non_empty "REPL_USER" "$REPL_USER"
+  require_non_empty "REPL_PASSWORD" "$REPL_PASSWORD"
+  require_non_empty "SOURCE_SSL_MODE" "$SOURCE_SSL_MODE"
+  require_non_empty "CHANNEL_NAME" "$CHANNEL_NAME"
+}
+
+main() {
+  require_bin oci
+  require_bin jq
+
+  parse_args "$@"
+  merge_input_file_defaults
+  ensure_context_defaults
+
+  log "Starting OCI MySQL A -> B backup/restore/channel setup"
+
+  if [[ "$NON_INTERACTIVE" == "false" ]]; then
+    interactive_prompt_missing_values
+  fi
+
+  [[ -n "$BACKUP_DISPLAY_NAME" ]] || BACKUP_DISPLAY_NAME="Blue-manual-backup-$(date +%Y%m%d-%H%M%S)"
+
+  if [[ -z "$SOURCE_HOSTNAME" && -n "$DB_A_ID" ]]; then
+    SOURCE_HOSTNAME="$(oci_json_auth mysql db-system get --db-system-id "$DB_A_ID" | jq -r '.data["ip-address"] // .data.ip_address // empty')"
+  fi
+
+  validate_required_inputs
+
+  log "Validating OCI CLI access..."
+  oci_json_auth iam region-subscription list >/dev/null || die "OCI CLI auth/permissions validation failed"
+
+  log "Summary:"
+  log "- Profile/Region: $PROFILE / $REGION_OVERRIDE"
+  log "- Compartment: $COMPARTMENT_ID"
+  log "- Source DB A: $DB_A_ID"
+  log "- Target DB B: $TARGET_DISPLAY_NAME ($TARGET_HOSTNAME), version=${TARGET_MYSQL_VERSION:-default}"
+
+  if [[ "$AUTO_YES" != "true" && "$NON_INTERACTIVE" == "false" ]]; then
+    confirm "Proceed with backup -> restore -> channel replication workflow?" || die "Aborted by user"
+  fi
+
+  log "Step 1/3: Creating backup from DB A"
+  local backup_id
+  backup_id="$(oci_json_auth mysql backup create \
+    --db-system-id "$DB_A_ID" \
+    --backup-type "$BACKUP_TYPE" \
+    --display-name "$BACKUP_DISPLAY_NAME" | extract_id)"
+  require_non_empty "backup_id" "$backup_id"
+  log "Backup OCID: $backup_id"
+  poll_backup_active "$backup_id"
+
+  log "Step 2/3: Creating DB B from backup"
+  local source_json
+  source_json="$(build_source_json "$backup_id")"
+  local -a create_db_args=(
+    mysql db-system create
+    --compartment-id "$COMPARTMENT_ID"
+    --subnet-id "$TARGET_SUBNET_ID"
+    --shape-name "$TARGET_SHAPE"
+    --display-name "$TARGET_DISPLAY_NAME"
+    --hostname-label "$TARGET_HOSTNAME"
+    --admin-username "$TARGET_ADMIN_USERNAME"
+    --admin-password "$TARGET_ADMIN_PASSWORD"
+    --is-highly-available "$TARGET_IS_HA"
+    --source "$source_json"
+  )
+  [[ -n "$TARGET_AD" ]] && create_db_args+=(--availability-domain "$TARGET_AD")
+  [[ -n "$TARGET_MYSQL_VERSION" ]] && create_db_args+=(--mysql-version "$TARGET_MYSQL_VERSION")
+
+  local db_b_id
+  db_b_id="$(oci_json_auth "${create_db_args[@]}" | extract_id)"
+  require_non_empty "db_b_id" "$db_b_id"
+  log "Target DB System B OCID: $db_b_id"
+  poll_db_active "$db_b_id"
+
+  log "Step 3/3: Creating channel A -> B"
+  local -a channel_args=(
+    mysql channel create-from-mysql
+    --compartment-id "$COMPARTMENT_ID"
+    --target-db-system-id "$db_b_id"
+    --display-name "$CHANNEL_DISPLAY_NAME"
+    --is-enabled true
+    --source-hostname "$SOURCE_HOSTNAME"
+    --source-port "$SOURCE_PORT"
+    --source-username "$REPL_USER"
+    --source-password "$REPL_PASSWORD"
+    --source-ssl-mode "$SOURCE_SSL_MODE"
+    --target-channel-name "$CHANNEL_NAME"
+  )
+  [[ -n "$TARGET_APPLIER_USERNAME" ]] && channel_args+=(--target-applier-username "$TARGET_APPLIER_USERNAME")
+
+  local channel_id
+  channel_id="$(oci_json_auth "${channel_args[@]}" | extract_id)"
+  require_non_empty "channel_id" "$channel_id"
+  log "Channel OCID: $channel_id"
+  poll_channel_active "$channel_id"
+
+  log "SUCCESS"
+  log "- Backup OCID: $backup_id"
+  log "- Target DB System B OCID: $db_b_id"
+  log "- Channel OCID: $channel_id"
+}
+
+main "$@"

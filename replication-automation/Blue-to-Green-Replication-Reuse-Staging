@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_NAME="Blue-to-Green-Replication-Reuse-Staging"
+
+NON_INTERACTIVE=false
+AUTO_YES=false
+INPUT_FILE=""
+
+CONFIG_FILE="${OCI_CLI_CONFIG_FILE:-/Users/$(id -un)/.oci/config}"
+PROFILE="${OCI_CLI_PROFILE:-DEFAULT}"
+REGION_OVERRIDE="${OCI_CLI_REGION:-}"
+
+POLL_INTERVAL=30
+POLL_TIMEOUT=7200
+
+COMPARTMENT_ID=""
+SOURCE_DB_ID=""
+TARGET_DB_ID=""
+
+SOURCE_HOSTNAME=""
+SOURCE_PORT="3306"
+REPL_USER=""
+REPL_PASSWORD=""
+SOURCE_SSL_MODE="REQUIRED"
+
+CHANNEL_DISPLAY_NAME="Blue-to-Staging-channel"
+CHANNEL_NAME="blue_to_staging"
+TARGET_APPLIER_USERNAME=""
+
+log() { printf '[%s] %s\n' "$SCRIPT_NAME" "$*"; }
+die() { printf '[%s] ERROR: %s\n' "$SCRIPT_NAME" "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  Blue-to-Green-Replication-Reuse-Staging [--non-interactive] [options]
+
+Purpose:
+  Reuse an existing target MySQL-Staging DB System and only create/activate
+  channel replication from source MySQL-Blue.
+
+Options:
+  --non-interactive
+  --yes
+  --input-file <json>
+
+  --profile <name>
+  --config-file <path>
+  --region <region>
+
+  --compartment-id <ocid>
+  --source-db-id <ocid>
+  --target-db-id <ocid>
+
+  --source-hostname <host-or-ip>
+  --source-port <port>
+  --repl-user <user>
+  --repl-password <password>
+  --source-ssl-mode <REQUIRED|VERIFY_CA|VERIFY_IDENTITY|DISABLED>
+
+  --channel-display-name <name>
+  --channel-name <name>
+  --target-applier-username <user>
+
+  --poll-interval <seconds>
+  --poll-timeout <seconds>
+  -h, --help
+USAGE
+}
+
+require_bin() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
+require_non_empty() { [[ -n "$2" ]] || die "Missing required value: $1"; }
+
+prompt() {
+  local message="$1" default_value="${2:-}" value
+  if [[ -n "$default_value" ]]; then
+    read -r -p "$message [$default_value]: " value
+    printf '%s' "${value:-$default_value}"
+  else
+    read -r -p "$message: " value
+    printf '%s' "$value"
+  fi
+}
+
+prompt_secret() {
+  local message="$1" value
+  read -r -s -p "$message: " value
+  printf '\n' >&2
+  printf '%s' "$value"
+}
+
+confirm() {
+  local ans
+  read -r -p "$1 [y/N]: " ans
+  [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+oci_json_auth() {
+  local -a base=("--profile" "$PROFILE")
+  [[ -f "$CONFIG_FILE" ]] && base+=("--config-file" "$CONFIG_FILE")
+  [[ -n "$REGION_OVERRIDE" ]] && base+=("--region" "$REGION_OVERRIDE")
+  oci "${base[@]}" "$@" --output json
+}
+
+extract_id() { jq -r '.data.id // .id // empty'; }
+
+json_get() {
+  local key="$1"
+  [[ -f "$INPUT_FILE" ]] || return 0
+  jq -r --arg k "$key" '.[$k] // empty' "$INPUT_FILE"
+}
+
+set_if_empty_from_json() {
+  local var_name="$1" json_key="$2" current="${!var_name}"
+  if [[ -z "$current" && -f "$INPUT_FILE" ]]; then
+    local val
+    val="$(json_get "$json_key")"
+    [[ -n "$val" ]] && printf -v "$var_name" '%s' "$val"
+  fi
+}
+
+poll_channel_active() {
+  local id="$1" elapsed=0 state
+  while (( elapsed <= POLL_TIMEOUT )); do
+    state="$(oci_json_auth mysql channel get --channel-id "$id" | jq -r '.data["lifecycle-state"] // .data.lifecycle_state // empty')"
+    log "Channel $id lifecycle-state: ${state:-unknown} (elapsed ${elapsed}s)"
+    [[ "$state" == "ACTIVE" ]] && return 0
+    [[ "$state" == "FAILED" || "$state" == "DELETED" || "$state" == "INACTIVE" ]] && die "Channel entered terminal/invalid state: $state"
+    sleep "$POLL_INTERVAL"; elapsed=$((elapsed + POLL_INTERVAL))
+  done
+  die "Timeout waiting for Channel to become ACTIVE"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --non-interactive) NON_INTERACTIVE=true; shift ;;
+      --yes) AUTO_YES=true; shift ;;
+      --input-file) INPUT_FILE="$2"; shift 2 ;;
+      --profile) PROFILE="$2"; shift 2 ;;
+      --config-file) CONFIG_FILE="$2"; shift 2 ;;
+      --region) REGION_OVERRIDE="$2"; shift 2 ;;
+      --compartment-id) COMPARTMENT_ID="$2"; shift 2 ;;
+      --source-db-id) SOURCE_DB_ID="$2"; shift 2 ;;
+      --target-db-id) TARGET_DB_ID="$2"; shift 2 ;;
+      --source-hostname) SOURCE_HOSTNAME="$2"; shift 2 ;;
+      --source-port) SOURCE_PORT="$2"; shift 2 ;;
+      --repl-user) REPL_USER="$2"; shift 2 ;;
+      --repl-password) REPL_PASSWORD="$2"; shift 2 ;;
+      --source-ssl-mode) SOURCE_SSL_MODE="$2"; shift 2 ;;
+      --channel-display-name) CHANNEL_DISPLAY_NAME="$2"; shift 2 ;;
+      --channel-name) CHANNEL_NAME="$2"; shift 2 ;;
+      --target-applier-username) TARGET_APPLIER_USERNAME="$2"; shift 2 ;;
+      --poll-interval) POLL_INTERVAL="$2"; shift 2 ;;
+      --poll-timeout) POLL_TIMEOUT="$2"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Unknown argument: $1" ;;
+    esac
+  done
+}
+
+merge_input_file_defaults() {
+  [[ -n "$INPUT_FILE" ]] || return 0
+  [[ -f "$INPUT_FILE" ]] || die "Input file not found: $INPUT_FILE"
+  set_if_empty_from_json PROFILE profile
+  set_if_empty_from_json CONFIG_FILE config_file
+  set_if_empty_from_json REGION_OVERRIDE region
+  set_if_empty_from_json COMPARTMENT_ID compartment_id
+  set_if_empty_from_json SOURCE_DB_ID source_db_id
+  set_if_empty_from_json TARGET_DB_ID target_db_id
+  set_if_empty_from_json SOURCE_HOSTNAME source_hostname
+  set_if_empty_from_json SOURCE_PORT source_port
+  set_if_empty_from_json REPL_USER repl_user
+  set_if_empty_from_json REPL_PASSWORD repl_password
+  set_if_empty_from_json SOURCE_SSL_MODE source_ssl_mode
+  set_if_empty_from_json CHANNEL_DISPLAY_NAME channel_display_name
+  set_if_empty_from_json CHANNEL_NAME channel_name
+  set_if_empty_from_json TARGET_APPLIER_USERNAME target_applier_username
+  set_if_empty_from_json POLL_INTERVAL poll_interval
+  set_if_empty_from_json POLL_TIMEOUT poll_timeout
+}
+
+interactive_prompt_missing_values() {
+  PROFILE="$(prompt "OCI CLI profile" "$PROFILE")"
+  CONFIG_FILE="$(prompt "OCI config file path" "$CONFIG_FILE")"
+  REGION_OVERRIDE="$(prompt "OCI region" "${REGION_OVERRIDE:-ap-tokyo-1}")"
+
+  COMPARTMENT_ID="$(prompt "Compartment OCID" "$COMPARTMENT_ID")"
+  SOURCE_DB_ID="$(prompt "Source DB System (MySQL-Blue) OCID" "$SOURCE_DB_ID")"
+  TARGET_DB_ID="$(prompt "Target DB System (MySQL-Staging) OCID" "$TARGET_DB_ID")"
+
+  SOURCE_HOSTNAME="$(prompt "Source hostname/IP (Blue)" "$SOURCE_HOSTNAME")"
+  SOURCE_PORT="$(prompt "Source port" "$SOURCE_PORT")"
+  REPL_USER="$(prompt "Replication username on Blue" "$REPL_USER")"
+  [[ -n "$REPL_PASSWORD" ]] || REPL_PASSWORD="$(prompt_secret "Replication user password on Blue")"
+  SOURCE_SSL_MODE="$(prompt "Source SSL mode" "$SOURCE_SSL_MODE")"
+  CHANNEL_DISPLAY_NAME="$(prompt "Channel display name" "$CHANNEL_DISPLAY_NAME")"
+  CHANNEL_NAME="$(prompt "Channel name" "$CHANNEL_NAME")"
+  TARGET_APPLIER_USERNAME="$(prompt "Target applier username (optional)" "$TARGET_APPLIER_USERNAME")"
+}
+
+validate_required_inputs() {
+  require_non_empty "PROFILE" "$PROFILE"
+  require_non_empty "REGION_OVERRIDE" "$REGION_OVERRIDE"
+  require_non_empty "COMPARTMENT_ID" "$COMPARTMENT_ID"
+  require_non_empty "SOURCE_DB_ID" "$SOURCE_DB_ID"
+  require_non_empty "TARGET_DB_ID" "$TARGET_DB_ID"
+  require_non_empty "SOURCE_HOSTNAME" "$SOURCE_HOSTNAME"
+  require_non_empty "SOURCE_PORT" "$SOURCE_PORT"
+  require_non_empty "REPL_USER" "$REPL_USER"
+  require_non_empty "REPL_PASSWORD" "$REPL_PASSWORD"
+  require_non_empty "SOURCE_SSL_MODE" "$SOURCE_SSL_MODE"
+  require_non_empty "CHANNEL_NAME" "$CHANNEL_NAME"
+}
+
+main() {
+  require_bin oci
+  require_bin jq
+
+  parse_args "$@"
+  merge_input_file_defaults
+
+  log "Starting reuse-existing-staging channel bootstrap"
+
+  if [[ "$NON_INTERACTIVE" == "false" ]]; then
+    interactive_prompt_missing_values
+  fi
+
+  validate_required_inputs
+
+  log "Validating OCI CLI access and DB existence..."
+  oci_json_auth iam region-subscription list >/dev/null || die "OCI CLI auth/permissions validation failed"
+  oci_json_auth mysql db-system get --db-system-id "$SOURCE_DB_ID" >/dev/null || die "Source DB not found/readable"
+  oci_json_auth mysql db-system get --db-system-id "$TARGET_DB_ID" >/dev/null || die "Target DB not found/readable"
+
+  log "Summary:"
+  log "- Source (Blue) DB: $SOURCE_DB_ID"
+  log "- Target (Staging) DB: $TARGET_DB_ID"
+  log "- Channel: $CHANNEL_DISPLAY_NAME (name=$CHANNEL_NAME)"
+  log "- Source endpoint: $SOURCE_HOSTNAME:$SOURCE_PORT"
+
+  if [[ "$AUTO_YES" != "true" && "$NON_INTERACTIVE" == "false" ]]; then
+    confirm "Proceed with channel creation (skip backup + skip DB create)?" || die "Aborted by user"
+  fi
+
+  local -a channel_args=(
+    mysql channel create-from-mysql
+    --compartment-id "$COMPARTMENT_ID"
+    --target-db-system-id "$TARGET_DB_ID"
+    --display-name "$CHANNEL_DISPLAY_NAME"
+    --is-enabled true
+    --source-hostname "$SOURCE_HOSTNAME"
+    --source-port "$SOURCE_PORT"
+    --source-username "$REPL_USER"
+    --source-password "$REPL_PASSWORD"
+    --source-ssl-mode "$SOURCE_SSL_MODE"
+    --target-channel-name "$CHANNEL_NAME"
+  )
+  [[ -n "$TARGET_APPLIER_USERNAME" ]] && channel_args+=(--target-applier-username "$TARGET_APPLIER_USERNAME")
+
+  log "Creating channel replication Blue -> Staging..."
+  local channel_id
+  channel_id="$(oci_json_auth "${channel_args[@]}" | extract_id)"
+  require_non_empty "channel_id" "$channel_id"
+  log "Channel OCID: $channel_id"
+
+  poll_channel_active "$channel_id"
+
+  log "SUCCESS"
+  log "- Channel OCID: $channel_id"
+}
+
+main "$@"
